@@ -13,4 +13,4 @@ COPY document_arena/ ./document_arena/
 
 EXPOSE 8501
 
-CMD ["streamlit", "run", "document_arena/Home.py", "--server.headless=true", "--server.enableCORS=false", "--browser.gatherUsageStats=false"]
+CMD ["streamlit", "run", "document_arena/Home.py", "--server.headless=true", "--server.enableCORS=false", "--server.enableXsrfProtection=false", "--browser.gatherUsageStats=false"]

@@ -5,8 +5,10 @@ import {
   RemovalPolicy,
   Stack,
   StackProps,
-  aws_apprunner as apprunner,
   aws_dynamodb as dynamodb,
+  aws_ec2 as ec2,
+  aws_ecs as ecs,
+  aws_ecs_patterns as ecsPatterns,
   aws_ecr_assets as ecrAssets,
   aws_iam as iam,
   aws_logs as logs,
@@ -77,87 +79,84 @@ export class DocumentArenaStack extends Stack {
       platform: ecrAssets.Platform.LINUX_AMD64,
     });
 
-    const accessRole = new iam.Role(this, 'AppRunnerEcrAccessRole', {
-      assumedBy: new iam.ServicePrincipal('build.apprunner.amazonaws.com'),
+    const logGroup = new logs.LogGroup(this, 'ServiceLogGroup', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy,
     });
-    image.repository.grantPull(accessRole);
 
-    const instanceRole = new iam.Role(this, 'AppRunnerInstanceRole', {
-      assumedBy: new iam.ServicePrincipal('tasks.apprunner.amazonaws.com'),
+    const vpc = new ec2.Vpc(this, 'Vpc', {
+      availabilityZones: [`${props.stage.region}a`, `${props.stage.region}b`],
+      natGateways: 0,
+      subnetConfiguration: [
+        {
+          name: 'public',
+          subnetType: ec2.SubnetType.PUBLIC,
+        },
+      ],
     });
-    documentBucket.grantReadWrite(instanceRole);
-    promptBucket.grantReadWrite(instanceRole);
-    eventsTable.grantReadWriteData(instanceRole);
-    processingTable.grantReadWriteData(instanceRole);
-    modelTable.grantReadWriteData(instanceRole);
-    instanceRole.addToPolicy(
+    vpc.applyRemovalPolicy(removalPolicy);
+
+    const service = new ecsPatterns.ApplicationLoadBalancedFargateService(this, 'WebService', {
+      vpc,
+      publicLoadBalancer: true,
+      assignPublicIp: true,
+      desiredCount: 1,
+      minHealthyPercent: 100,
+      cpu: 256,
+      memoryLimitMiB: 512,
+      serviceName: props.stage.serviceName,
+      taskImageOptions: {
+        image: ecs.ContainerImage.fromDockerImageAsset(image),
+        containerPort: 8501,
+        logDriver: ecs.LogDrivers.awsLogs({
+          logGroup,
+          streamPrefix: props.stage.serviceName,
+        }),
+        environment: {
+          APP_STAGE: props.stage.name,
+          AWS_REGION: this.region,
+          DOCUMENT_BUCKET: documentBucket.bucketName,
+          PROMPT_BUCKET: promptBucket.bucketName,
+          EVENTS_TABLE: eventsTable.tableName,
+          PROCESSING_TABLE: processingTable.tableName,
+          MODEL_TABLE: modelTable.tableName,
+          MODEL_ID: DEFAULT_MODEL_ID,
+        },
+      },
+    });
+    service.targetGroup.configureHealthCheck({
+      path: '/_stcore/health',
+      healthyHttpCodes: '200',
+      interval: Duration.seconds(30),
+      timeout: Duration.seconds(5),
+      healthyThresholdCount: 2,
+      unhealthyThresholdCount: 3,
+    });
+    service.targetGroup.setAttribute('deregistration_delay.timeout_seconds', '30');
+
+    const taskRole = service.taskDefinition.taskRole;
+    documentBucket.grantReadWrite(taskRole);
+    promptBucket.grantReadWrite(taskRole);
+    eventsTable.grantReadWriteData(taskRole);
+    processingTable.grantReadWriteData(taskRole);
+    modelTable.grantReadWriteData(taskRole);
+    taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'textract:*'],
         resources: ['*'],
       }),
     );
 
-    const logGroup = new logs.LogGroup(this, 'ServiceLogGroup', {
-      retention: logs.RetentionDays.ONE_MONTH,
-      removalPolicy,
-    });
-
-    const service = new apprunner.CfnService(this, 'AppRunnerService', {
-      serviceName: props.stage.serviceName,
-      sourceConfiguration: {
-        autoDeploymentsEnabled: false,
-        authenticationConfiguration: {
-          accessRoleArn: accessRole.roleArn,
-        },
-        imageRepository: {
-          imageIdentifier: image.imageUri,
-          imageRepositoryType: 'ECR',
-          imageConfiguration: {
-            port: '8501',
-            runtimeEnvironmentVariables: [
-              { name: 'APP_STAGE', value: props.stage.name },
-              { name: 'AWS_REGION', value: this.region },
-              { name: 'DOCUMENT_BUCKET', value: documentBucket.bucketName },
-              { name: 'PROMPT_BUCKET', value: promptBucket.bucketName },
-              { name: 'EVENTS_TABLE', value: eventsTable.tableName },
-              { name: 'PROCESSING_TABLE', value: processingTable.tableName },
-              { name: 'MODEL_TABLE', value: modelTable.tableName },
-              { name: 'MODEL_ID', value: DEFAULT_MODEL_ID },
-            ],
-          },
-        },
-      },
-      instanceConfiguration: {
-        cpu: '0.25 vCPU',
-        memory: '0.5 GB',
-        instanceRoleArn: instanceRole.roleArn,
-      },
-      healthCheckConfiguration: {
-        protocol: 'HTTP',
-        path: '/_stcore/health',
-        interval: 10,
-        timeout: 5,
-        healthyThreshold: 1,
-        unhealthyThreshold: 5,
-      },
-      observabilityConfiguration: {
-        observabilityEnabled: false,
-      },
-      tags: [
-        { key: 'stage', value: props.stage.name },
-        { key: 'app', value: 'document-arena' },
-      ],
-    });
-    service.node.addDependency(accessRole);
-    service.node.addDependency(instanceRole);
     service.node.addDependency(logGroup);
 
-    new CfnOutput(this, 'ServiceUrl', { value: `https://${service.attrServiceUrl}` });
+    const serviceUrl = `http://${service.loadBalancer.loadBalancerDnsName}`;
+
+    new CfnOutput(this, 'ServiceUrl', { value: serviceUrl });
     new CfnOutput(this, 'DocumentBucketName', { value: documentBucket.bucketName });
     new CfnOutput(this, 'PromptBucketName', { value: promptBucket.bucketName });
     new CfnOutput(this, 'EventsTableName', { value: eventsTable.tableName });
     new CfnOutput(this, 'SmokeTestCommand', {
-      value: `python tests/smoke_test.py --url https://${service.attrServiceUrl}`,
+      value: `python tests/smoke_test.py --url ${serviceUrl}`,
     });
   }
 }

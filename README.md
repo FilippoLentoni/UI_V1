@@ -6,7 +6,7 @@ The project replaces an internal Streamlit deployment package with a public AWS-
 
 - AWS CDK v2 TypeScript app
 - AWS CDK Pipelines backed by CodePipeline and CodeBuild
-- Streamlit app deployed on AWS App Runner from a CDK Docker image asset
+- Streamlit app deployed on Amazon ECS Fargate behind an Application Load Balancer
 - S3 buckets for uploaded documents and prompt templates
 - DynamoDB tables for processing sessions, events, and model metadata
 - Optional Bedrock model calls using the Amazon Nova 2 Lite cross-region inference profile
@@ -61,7 +61,7 @@ Deploy a personal stack directly for low-cost smoke testing:
 DOCKER_BUILDKIT=1 AWS_PROFILE=columbia APP_REGION=us-east-2 npm run deploy:personal -- --require-approval never
 ```
 
-On Apple Silicon machines, install Docker Buildx before the direct personal deploy so CDK can build the App Runner image for `linux/amd64`.
+On Apple Silicon machines, install Docker Buildx before the direct personal deploy so CDK can build the Fargate image for `linux/amd64`.
 
 Deploy the CDK Pipeline:
 
@@ -135,7 +135,7 @@ pip install -r requirements.txt
 streamlit run document_arena/Home.py
 ```
 
-Smoke-test a deployed App Runner service:
+Smoke-test a deployed web service:
 
 ```bash
 python tests/smoke_test.py --url <service-url>
@@ -148,14 +148,14 @@ python tests/smoke_test.py --url <service-url>
 | Internal build workspace and package metadata | `package.json`, `requirements.txt`, Dockerfile |
 | Internal container image builder | CDK Docker image asset |
 | Internal deployment pipeline constructs | `aws-cdk-lib/pipelines.CodePipeline` |
-| Internal domain and auth interceptors | App Runner default HTTPS URL for portable external deployment |
+| Internal domain and auth interceptors | Public Application Load Balancer URL for portable external deployment |
 | Internal auth/service onboarding | Public IAM roles scoped to S3, DynamoDB, Bedrock, and Textract |
 | Internal stage account maps | Environment-variable driven stage config |
 | Internal source review flow | GitHub pull request review before merge to `main` |
 
 ## Assumptions
 
-- App Runner is used instead of custom ALB, CloudFront, internal auth, and internal hosted-zone automation to keep the external sample portable.
+- ECS Fargate behind an Application Load Balancer is used because Streamlit requires WebSockets.
 - The generated app supports document upload, prompt editing, session tracking, and optional Bedrock summarization.
-- The smoke test uses App Runner's Streamlit health endpoint and does not require production-sized input data.
+- The smoke test uses Streamlit's health endpoint and does not require production-sized input data.
 - Full Bedrock summarization requires model access for the configured inference profile in the target account.

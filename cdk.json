@@ -3,6 +3,10 @@
   "context": {
     "@aws-cdk/core:newStyleStackSynthesis": true,
     "@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy": true,
-    "@aws-cdk/aws-iam:minimizePolicies": true
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "availability-zones:account=169976659173:region=us-east-2": [
+      "us-east-2a",
+      "us-east-2b"
+    ]
   }
 }
