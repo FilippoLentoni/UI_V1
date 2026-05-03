@@ -1,0 +1,4 @@
+boto3==1.43.2
+pandas==2.3.3
+requests==2.33.1
+streamlit==1.52.1
